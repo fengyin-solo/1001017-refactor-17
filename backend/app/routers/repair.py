@@ -41,10 +41,12 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条维修任务，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
+    """登记一条维修任务，缺字段或交安设施已不在役时说明原因而不是静默丢弃。"""
+    entry, missing, rejected = service.create_entry(payload.values)
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
+    if rejected:
+        return ActionResult(ok=False, message=rejected)
     return ActionResult(ok=True, message="维修任务已登记", entry=entry)
 
 

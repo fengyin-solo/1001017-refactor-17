@@ -1,8 +1,13 @@
-"""养护维修业务规则：状态流转、字段校验与筛选口径都收在这里。"""
+"""养护维修业务规则：状态流转、字段校验与筛选口径都收在这里。
+
+面向交安设施派养护任务时，设施是否在役、可养护不在本文件判断，
+统一调用 app.services.safety_status，与交安设施台账、设施详情同口径。
+"""
 from __future__ import annotations
 
 from typing import Any
 
+from app.services import safety_status
 from app.store import store
 
 MODULE = "repair"
@@ -33,18 +38,29 @@ class RepairService:
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
         return store.find(MODULE, entry_id)
 
-    def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    def create_entry(
+        self, values: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, list[str], str]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
         if missing:
-            return None, missing
+            return None, missing, ""
+        station = values.get(safety_status.STATION_FIELD)
+        if station is not None and str(station).strip():
+            # 登记交安设施养护任务：可养护与否完全以统一口径判定，
+            # 台账里已拆除/不在役的设施不允许再派养护任务
+            verdict = safety_status.judge_by_station(station)
+            if not verdict.serviceable:
+                return None, [], verdict.reason
         rows = store.rows(MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in REQUIRED_FIELDS})
+        if station is not None and str(station).strip():
+            entry[safety_status.STATION_FIELD] = str(station).strip()
         entry["status"] = STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
         rows.append(entry)
-        return entry, []
+        return entry, [], ""
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(MODULE, entry_id)
