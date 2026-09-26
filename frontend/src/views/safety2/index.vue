@@ -104,6 +104,11 @@ async function runAction(action: string, row: Row) {
     if (!response.ok) {
       throw new Error('交安设施动作未生效，请稍后重试')
     }
+    const payload = await response.json()
+    if (payload?.ok === false) {
+      errorMessage.value = payload.message || '交安设施动作未生效，请稍后重试'
+      return
+    }
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '交安设施操作失败'

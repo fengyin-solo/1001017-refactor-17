@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services import safety2_policy
 from app.store import store
 
 MODULE = "safety2"
 REQUIRED_FIELDS = ["设施编号", "设施类型", "所在路段"]
 STATUS_ORDER = ["完好", "损坏", "维修中", "已更换"]
 ACTION_RULES = {"登记损坏": "损坏", "安排维修": "维修中", "完成更换": "已更换"}
+# 派养护任务前必须先过统一的在役/可养护判断
+MAINTENANCE_ACTIONS = {"安排维修"}
 NEGATIVE_ACTIONS = []
 
 
@@ -28,10 +31,19 @@ class Safety2Service:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
         start = max(page - 1, 0) * size
-        return rows[start:start + size], total
+        # 台账列表：给每条记录挂上统一口径的在役/可养护结论
+        page_rows = [
+            safety2_policy.evaluate_facility(row).attach(row)
+            for row in rows[start:start + size]
+        ]
+        return page_rows, total
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
-        return store.find(MODULE, entry_id)
+        entry = store.find(MODULE, entry_id)
+        if entry is None:
+            return None
+        # 设施详情：结论与台账、养护登记同源，不再各写一遍
+        return safety2_policy.evaluate_facility(entry).attach(entry)
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
@@ -55,6 +67,11 @@ class Safety2Service:
         target = ACTION_RULES[action]
         if target not in STATUS_ORDER:
             return None, f"目标状态「{target}」不在允许的状态序列里"
+        if action in MAINTENANCE_ACTIONS:
+            # 养护记录登记/派养护任务前的校验，直接复用统一口径，避免与台账、详情各说各话
+            verdict = safety2_policy.evaluate_facility(entry)
+            if not verdict.maintainable:
+                return None, f"不能派养护任务：{verdict.reason}"
         entry["status"] = target
         entry["pending"] = target != STATUS_ORDER[-1]
         entry["abnormal"] = action in NEGATIVE_ACTIONS
